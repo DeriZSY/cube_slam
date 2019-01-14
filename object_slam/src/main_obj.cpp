@@ -55,66 +55,97 @@ bool save_results_to_txt;
 cv::Mat_<float> matx_to3d_, maty_to3d_;
 
 // for converting depth image to point cloud.
+
+// Helper function: create mapping from 2d image back to point cloud given depth
 void set_up_calibration(const Eigen::Matrix3f& calibration_mat,const int im_height,const int im_width)
 {  
     matx_to3d_.create(im_height, im_width);
     maty_to3d_.create(im_height, im_width);
+
     float center_x=calibration_mat(0,2);  //cx
     float center_y=calibration_mat(1,2);  //cy
     float fx_inv=1.0/calibration_mat(0,0);  // 1/fx
     float fy_inv=1.0/calibration_mat(1,1);  // 1/fy
+
+	//
     for (int v = 0; v < im_height; v++) {
-	for (int u = 0; u < im_width; u++) {
-	  matx_to3d_(v,u) = (u - center_x) * fx_inv;
-	  maty_to3d_(v,u) = (v - center_y) * fy_inv;
-	}
+		for (int u = 0; u < im_width; u++) {
+			matx_to3d_(v,u) = (u - center_x) * fx_inv;
+			maty_to3d_(v,u) = (v - center_y) * fy_inv;
+		}
     }
 }
 
 // depth img is already in m unit.
+// Construct XYZRGB point cloud from rgb image and depth image, the convert to world frame
 void depth_to_cloud(const cv::Mat& rgb_img, const cv::Mat& depth_img,const Eigen::Matrix4f transToWorld, CloudXYZRGB::Ptr& point_cloud,bool downsample=false)
 {
+	// create XYZRGB point cloud
     pcl::PointXYZRGB pt;
-    pcl::ApproximateVoxelGrid<pcl::PointXYZRGB> vox_grid_;
+    pcl::ApproximateVoxelGrid<pcl::PointXYZRGB> vox_grid_; // for downsampling
     float close_depth_thre = 0.1;
     float far_depth_thre = 3.0;
+	//FIXEME 
       far_depth_thre = 3;
-    int im_width = rgb_img.cols; int im_height= rgb_img.rows;
+ 	
+	// Get width and height	   
+	int im_width = rgb_img.cols; 
+	int im_height= rgb_img.rows;
+ 
+
+	// row by row iterate through rbg_img
     for (int32_t i=0; i<im_width*im_height; i++) {      // row by row
-	int ux=i % im_width; int uy=i / im_width;       
-	float pix_depth= depth_img.at<float>(uy,ux);
-	if (pix_depth>close_depth_thre && pix_depth<far_depth_thre){
-	      pt.z=pix_depth; pt.x=matx_to3d_(uy,ux)*pix_depth; pt.y=maty_to3d_(uy,ux)*pix_depth;
-	      Eigen::VectorXf global_pt=homo_to_real_coord_vec<float>(transToWorld*Eigen::Vector4f(pt.x,pt.y,pt.z,1));  // change to global position
-	      pt.x=global_pt(0); pt.y=global_pt(1); pt.z=global_pt(2);
-	      pt.r = rgb_img.at<cv::Vec3b>(uy,ux)[2]; pt.g = rgb_img.at<cv::Vec3b>(uy,ux)[1]; pt.b = rgb_img.at<cv::Vec3b>(uy,ux)[0];
-	      point_cloud->points.push_back(pt);
-	}
+		int ux=i % im_width; 
+		int uy=i / im_width;      
+
+		// get corresponding depth
+		float pix_depth= depth_img.at<float>(uy,ux);
+
+		// if in depth range: 		
+		if (pix_depth>close_depth_thre && pix_depth<far_depth_thre){
+			// assign coordinate to point cloud with previously computed transformation. 
+			pt.z=pix_depth; 
+			pt.x=matx_to3d_(uy,ux)*pix_depth; 
+			pt.y=maty_to3d_(uy,ux)*pix_depth;
+			
+			// transform point cloud to world frame
+			Eigen::VectorXf global_pt=homo_to_real_coord_vec<float>(transToWorld*Eigen::Vector4f(pt.x,pt.y,pt.z,1));  
+			pt.x=global_pt(0); pt.y=global_pt(1); pt.z=global_pt(2);
+			pt.r = rgb_img.at<cv::Vec3b>(uy,ux)[2]; pt.g = rgb_img.at<cv::Vec3b>(uy,ux)[1]; pt.b = rgb_img.at<cv::Vec3b>(uy,ux)[0];
+			point_cloud->points.push_back(pt);
+		}
     }    
     if (downsample)
     {
-	vox_grid_.setLeafSize(0.02,0.02,0.02);
-	vox_grid_.setDownsampleAllData(true);
-	vox_grid_.setInputCloud(point_cloud);
-	vox_grid_.filter(*point_cloud);
+		vox_grid_.setLeafSize(0.02,0.02,0.02);
+		vox_grid_.setDownsampleAllData(true);
+		vox_grid_.setInputCloud(point_cloud);
+		vox_grid_.filter(*point_cloud);
     }
 }
 
 // one cuboid need front and back markers...
+// cube_corners : 3*8 
 void cuboid_corner_to_marker(const Matrix38d& cube_corners,visualization_msgs::Marker& marker, int bodyOrfront)
 {
+
     Eigen::VectorXd edge_pt_ids;
+
     if (bodyOrfront==0) { // body edges
-	edge_pt_ids.resize(16); edge_pt_ids<<1,2,3,4,1,5,6,7,8,5,6,2,3,7,8,4;edge_pt_ids.array()-=1;
+		edge_pt_ids.resize(16); 
+		edge_pt_ids<<1,2,3,4,1,5,6,7,8,5,6,2,3,7,8,4;
+		edge_pt_ids.array()-=1;
     }else { // front face edges
-	edge_pt_ids.resize(5); edge_pt_ids<<1,2,6,5,1;edge_pt_ids.array()-=1;
+		edge_pt_ids.resize(5); 
+		edge_pt_ids<<1,2,6,5,1;
+		edge_pt_ids.array()-=1;
     }
     marker.points.resize(edge_pt_ids.rows());
     for (int pt_id=0; pt_id<edge_pt_ids.rows(); pt_id++)
     {
-	marker.points[pt_id].x = cube_corners(0, edge_pt_ids(pt_id));
-	marker.points[pt_id].y = cube_corners(1, edge_pt_ids(pt_id));
-	marker.points[pt_id].z = cube_corners(2, edge_pt_ids(pt_id));
+		marker.points[pt_id].x = cube_corners(0, edge_pt_ids(pt_id));
+		marker.points[pt_id].y = cube_corners(1, edge_pt_ids(pt_id));
+		marker.points[pt_id].z = cube_corners(2, edge_pt_ids(pt_id));
     }
 }
 
@@ -343,14 +374,16 @@ void publish_all_poses(std::vector<tracking_frame*> all_frames,std::vector<objec
 //NOTE offline_pred_objects and init_frame_poses are not used in online_detect_mode! truth cam pose of first frame is used.
 void incremental_build_graph(Eigen::MatrixXd& offline_pred_frame_objects, Eigen::MatrixXd& init_frame_poses, Eigen::MatrixXd& truth_frame_poses)
 {  
+	// initialize calibrate matrix from data set 
     Eigen::Matrix3d calib; 
     calib<<535.4,  0,  320.1,   // for TUM cabinet data.
 	    0,  539.2, 247.6,
 	    0,      0,     1;    
     
+	// get total frame number 
     int total_frame_number = truth_frame_poses.rows();
 
-    // detect all frames' cuboids.
+    // detect all frames' cuboids
     detect_3d_cuboid detect_cuboid_obj;
     detect_cuboid_obj.whether_plot_detail_images = false;
     detect_cuboid_obj.whether_plot_final_images = false;
