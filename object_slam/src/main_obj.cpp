@@ -384,7 +384,7 @@ void incremental_build_graph(Eigen::MatrixXd& offline_pred_frame_objects, Eigen:
     int total_frame_number = truth_frame_poses.rows();
 
     // detect all frames' cuboids
-    detect_3d_cuboid detect_cuboid_obj;
+    detect_3d_cuboid detect_cuboid_obj; // create a 3d cuboid detection object
     detect_cuboid_obj.whether_plot_detail_images = false;
     detect_cuboid_obj.whether_plot_final_images = false;
     detect_cuboid_obj.print_details = false;  // false  true
@@ -401,10 +401,10 @@ void incremental_build_graph(Eigen::MatrixXd& offline_pred_frame_objects, Eigen:
     
     // graph optimization.
     //NOTE in this example, there is only one object!!! perfect association
-    g2o::SparseOptimizer graph;
-    g2o::BlockSolverX::LinearSolverType* linearSolver;
+    g2o::SparseOptimizer graph; // create a SparseOptimizer graph
+    g2o::BlockSolverX::LinearSolverType* linearSolver; // set a linear solver
     linearSolver = new g2o::LinearSolverDense<g2o::BlockSolverX::PoseMatrixType>();
-    g2o::BlockSolverX * solver_ptr = new g2o::BlockSolverX(linearSolver);
+    g2o::BlockSolverX * solver_ptr = new g2o::BlockSolverX(linearSolver); // set block solver pointer
     g2o::OptimizationAlgorithmLevenberg* solver = new g2o::OptimizationAlgorithmLevenberg(solver_ptr);
     graph.setAlgorithm(solver);    graph.setVerbose(false);
 
@@ -413,41 +413,59 @@ void incremental_build_graph(Eigen::MatrixXd& offline_pred_frame_objects, Eigen:
     g2o::SE3Quat fixed_init_cam_pose_Twc(truth_frame_poses.row(0).tail<7>());
     
     // save optimization results of each frame
-    std::vector<object_landmark*> cube_pose_opti_history(total_frame_number, nullptr);  //landmark pose after each frame's optimization
-    std::vector<object_landmark*> cube_pose_raw_detected_history(total_frame_number, nullptr); //raw detected cuboid frame each frame. before optimization
+
+	//landmark pose after each frame's optimization
+    std::vector<object_landmark*> cube_pose_opti_history(total_frame_number, nullptr);//初始化总样本数的空指针
+
+	//raw detected cuboid frame each frame. before optimization
+    std::vector<object_landmark*> cube_pose_raw_detected_history(total_frame_number, nullptr);//同上
 
     int offline_cube_obs_row_id = 0;
-    
+
+    // 储存frame
     std::vector<tracking_frame*> all_frames(total_frame_number);    
+    // Object Vertex指针
     g2o::VertexCuboid* vCube;
     
     // process each frame online and incrementally
+    //遍历所有发过来的frame
     for (int frame_index=0;frame_index<total_frame_number;frame_index++)
     {
 	  g2o::SE3Quat curr_cam_pose_Twc;
-	  g2o::SE3Quat odom_val; // from previous frame to current frame
-	  
+
+	  g2o::SE3Quat odom_val;
+
+
+	  // Initial Pose Estimation
 	  if (frame_index==0)
 		curr_cam_pose_Twc = fixed_init_cam_pose_Twc;
+	  // if not the first frame
 	  else
 	  {
+	  	// get previous pose
 		g2o::SE3Quat prev_pose_Tcw = all_frames[frame_index-1]->cam_pose_Tcw;
 		if (frame_index>1)  // from third frame, use constant motion model to initialize camera.
 		{
+			// compute odom value using previous 2 frames, and assume the same motion from prev to curr frame
 		    g2o::SE3Quat prev_prev_pose_Tcw = all_frames[frame_index-2]->cam_pose_Tcw;
 		    odom_val = prev_pose_Tcw*prev_prev_pose_Tcw.inverse();
 		}
+
 		curr_cam_pose_Twc = (odom_val*prev_pose_Tcw).inverse();
 	  }
             
-	  
+	  // create a new frame (current tracking frame)
 	  tracking_frame* currframe = new tracking_frame();
 	  currframe->frame_seq_id = frame_index;
 	  all_frames[frame_index] = currframe;
 
-	  
+
 	  bool has_detected_cuboid = false;
-	  g2o::cuboid cube_local_meas; double proposal_error;
+
+	  g2o::cuboid cube_local_meas;
+
+	  double proposal_error;
+
 	  char frame_index_c[256];	sprintf(frame_index_c,"%04d",frame_index);  // format into 4 digit
 	  
 	  // read or detect cuboid
@@ -458,7 +476,10 @@ void incremental_build_graph(Eigen::MatrixXd& offline_pred_frame_objects, Eigen:
 	    
 	      //edge detection
 	      cv::Mat all_lines_mat;
+
+	      // Detect a line for read image and put it in all_lines_mat
 	      line_lbd_obj.detect_filter_lines(raw_rgb_img, all_lines_mat);
+
 	      Eigen::MatrixXd all_lines_raw(all_lines_mat.rows,4);
 	      for (int rr=0;rr<all_lines_mat.rows;rr++)
 		for (int cc=0;cc<4;cc++)
